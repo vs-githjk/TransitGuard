@@ -41,7 +41,9 @@ export default function DashboardPage() {
     e.stopPropagation();
     if (popover?.key === key) { setPopover(null); return; }
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    setPopover({ key, lines, x: rect.left, y: rect.bottom + 6 });
+    const popoverWidth = 288; // max-w-xs = 320px, use 288 as safe estimate
+    const x = Math.min(rect.left, window.innerWidth - popoverWidth - 12);
+    setPopover({ key, lines, x, y: rect.bottom + 6 });
   };
 
   useEffect(() => {
