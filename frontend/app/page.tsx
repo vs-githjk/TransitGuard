@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
-import { Search, RefreshCw, Download, Upload, AlertTriangle, CheckCircle, Clock } from "lucide-react";
+import { Search, RefreshCw, Download, Upload, AlertTriangle, CheckCircle, Clock, ChevronDown } from "lucide-react";
 import { fetchBags, refreshData } from "@/lib/api";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -32,6 +32,27 @@ export default function DashboardPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadMsg, setUploadMsg] = useState<string | null>(null);
+
+  type Popover = { key: string; lines: string[]; x: number; y: number };
+  const [popover, setPopover] = useState<Popover | null>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  const openPopover = (e: React.MouseEvent, key: string, lines: string[]) => {
+    e.stopPropagation();
+    if (popover?.key === key) { setPopover(null); return; }
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    setPopover({ key, lines, x: rect.left, y: rect.bottom + 6 });
+  };
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+        setPopover(null);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -267,15 +288,32 @@ export default function DashboardPage() {
                     <td className="px-3 py-3"><StatusChip status={bag.current_status} /></td>
                     <td className="px-3 py-3"><RiskScoreBar score={bag.risk_score} /></td>
                     <td className="px-3 py-3"><RiskBadge level={bag.risk_level} /></td>
-                    <td className="px-3 py-3 max-w-48">
-                      <div className="space-y-0.5">
-                        {(bag.risk_reasons || []).slice(0, 2).map((r, i) => (
-                          <div key={i} className="text-xs text-slate-400 truncate">• {r}</div>
-                        ))}
-                      </div>
+                    <td className="px-3 py-3">
+                      {(bag.risk_reasons || []).length > 0 ? (
+                        <button
+                          onClick={(e) => openPopover(e, `${bag.bag_id}-reasons`, bag.risk_reasons || [])}
+                          className={`flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors ${popover?.key === `${bag.bag_id}-reasons` ? "bg-slate-700 border-slate-500 text-slate-200" : "bg-slate-800/60 border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-300"}`}
+                        >
+                          <span className="truncate max-w-32">{(bag.risk_reasons || [])[0]}</span>
+                          {(bag.risk_reasons || []).length > 1 && <span className="shrink-0 text-slate-500">+{(bag.risk_reasons || []).length - 1}</span>}
+                          <ChevronDown className={`w-3 h-3 shrink-0 transition-transform ${popover?.key === `${bag.bag_id}-reasons` ? "rotate-180" : ""}`} />
+                        </button>
+                      ) : (
+                        <span className="text-xs text-slate-600">—</span>
+                      )}
                     </td>
-                    <td className="px-3 py-3 max-w-44">
-                      <div className="text-xs text-slate-300 leading-snug line-clamp-2">{bag.recommended_action}</div>
+                    <td className="px-3 py-3">
+                      {bag.recommended_action ? (
+                        <button
+                          onClick={(e) => openPopover(e, `${bag.bag_id}-action`, [bag.recommended_action])}
+                          className={`flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors ${popover?.key === `${bag.bag_id}-action` ? "bg-slate-700 border-slate-500 text-slate-200" : "bg-slate-800/60 border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-300"}`}
+                        >
+                          <span className="truncate max-w-32">{bag.recommended_action}</span>
+                          <ChevronDown className={`w-3 h-3 shrink-0 transition-transform ${popover?.key === `${bag.bag_id}-action` ? "rotate-180" : ""}`} />
+                        </button>
+                      ) : (
+                        <span className="text-xs text-slate-600">—</span>
+                      )}
                     </td>
                   </tr>
                 ))
@@ -288,6 +326,23 @@ export default function DashboardPage() {
       <p className="text-xs text-slate-600">
         Showing {bags.length} of {total} bags · Auto-refreshes every 8 seconds
       </p>
+
+      {popover && (
+        <div
+          ref={popoverRef}
+          style={{ position: "fixed", top: popover.y, left: popover.x, zIndex: 50 }}
+          className="bg-slate-800 border border-slate-600 rounded-lg shadow-xl p-3 max-w-xs w-max"
+        >
+          <ul className="space-y-1.5">
+            {popover.lines.map((line, i) => (
+              <li key={i} className="flex gap-2 text-xs text-slate-200 leading-snug">
+                <span className="text-slate-500 shrink-0">•</span>
+                <span>{line}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
