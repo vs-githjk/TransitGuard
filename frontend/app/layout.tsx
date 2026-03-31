@@ -4,7 +4,7 @@ import Sidebar from "@/components/Sidebar";
 import ThemeProvider from "@/components/ThemeProvider";
 
 export const metadata: Metadata = {
-  title: "BagTrack — Baggage Risk Dashboard",
+  title: "TransitGuard — Baggage Risk Dashboard",
   description: "Proactive baggage missed-connection risk detection",
 };
 

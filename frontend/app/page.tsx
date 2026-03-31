@@ -127,7 +127,7 @@ export default function DashboardPage() {
     const csv = [cols.join(","), ...rows].join("\n");
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
-    a.download = "bagtrack_export.csv";
+    a.download = "transitguard_export.csv";
     a.click();
   };
 

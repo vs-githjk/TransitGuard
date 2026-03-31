@@ -24,7 +24,7 @@ export default function Sidebar() {
             <Luggage className="w-4 h-4 text-white" />
           </div>
           <div>
-            <div className="text-sm font-bold text-slate-900 dark:text-white leading-none">BagTrack</div>
+            <div className="text-sm font-bold text-slate-900 dark:text-white leading-none">TransitGuard</div>
             <div className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">Risk Dashboard</div>
           </div>
         </div>
