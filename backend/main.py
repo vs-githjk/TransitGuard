@@ -85,11 +85,13 @@ async def _simulation_loop():
         for bag in sample:
             mutated = False
 
-            # 35% chance: worsen delay, reduce effective layover
-            if random.random() < 0.35:
-                delta = random.randint(2, 10)
-                bag["arrival_delay_minutes"] = bag.get("arrival_delay_minutes", 0) + delta
-                bag["layover_minutes"] = max(5, bag.get("layover_minutes", 30) - delta)
+            # 35% chance: worsen delay, but only if layover still has headroom
+            current_layover = bag.get("layover_minutes", 30)
+            current_delay = bag.get("arrival_delay_minutes", 0)
+            if random.random() < 0.35 and current_layover > 20 and current_delay < 90:
+                delta = random.randint(2, 6)
+                bag["arrival_delay_minutes"] = current_delay + delta
+                bag["layover_minutes"] = max(15, current_layover - delta)
                 mutated = True
 
             # 40% chance: status progression
