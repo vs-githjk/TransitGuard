@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import pickle
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -167,6 +168,61 @@ def _get_reasons(bag: dict, top_n: int = 4) -> list[str]:
     return [text for _, text in fired[:top_n]]
 
 
+def _get_risk_factor_scores(bag: dict, risk_score: float) -> list[dict]:
+    """Per-factor contribution to risk score, weighted proportionally."""
+    fired = []
+    for predicate, text, feature, weight in REASON_RULES:
+        try:
+            if predicate(bag):
+                fired.append({"label": text, "feature": feature, "weight": weight})
+        except Exception:
+            pass
+    if not fired:
+        return []
+    total_weight = sum(f["weight"] for f in fired)
+    result = []
+    for f in fired:
+        contribution = round((f["weight"] / total_weight) * risk_score, 1)
+        result.append({
+            "label": f["label"],
+            "feature": f["feature"],
+            "score": contribution,
+        })
+    result.sort(key=lambda x: -x["score"])
+    return result
+
+
+def _get_confidence(bag: dict) -> tuple[int, list[str]]:
+    """Compute data confidence score (0-100) and reliability flags."""
+    flags = []
+    score = 100
+
+    if not bag.get("time_bag_received"):
+        flags.append("Missing bag receipt timestamp")
+        score -= 15
+    if not bag.get("time_bag_sorted"):
+        flags.append("Missing sort timestamp")
+        score -= 15
+
+    try:
+        actual = datetime.fromisoformat(str(bag["actual_arrival"]))
+        departure = datetime.fromisoformat(str(bag["scheduled_departure"]))
+        if actual >= departure:
+            flags.append("Arrival time is after scheduled departure — data conflict")
+            score -= 25
+    except Exception:
+        pass
+
+    if bag.get("arrival_delay_minutes", 0) > 180:
+        flags.append("Unusually high delay (> 3h) — verify data accuracy")
+        score -= 10
+    if bag.get("layover_minutes", 0) > 480:
+        flags.append("Layover > 8h — may be a planned stopover, not a transfer")
+        score -= 5
+
+    return max(0, score), flags
+
+
 ACTION_MAP = [
     (lambda b, s, r: r >= 75 and b.get("customs_recheck_required"), "Escort bag through customs fast-track and notify outbound gate team"),
     (lambda b, s, r: r >= 75 and b.get("security_recheck_required"), "Send bag to expedited security screening; alert supervisor"),
@@ -195,7 +251,6 @@ def score_bag(bag: dict, model: RandomForestClassifier, scaler: StandardScaler) 
     features_scaled = scaler.transform(features)
 
     prob = model.predict_proba(features_scaled)[0]
-    # prob[1] = probability of missed connection
     missed_prob = prob[1] if len(prob) > 1 else prob[0]
     risk_score = round(float(missed_prob) * 100, 1)
 
@@ -208,6 +263,8 @@ def score_bag(bag: dict, model: RandomForestClassifier, scaler: StandardScaler) 
 
     reasons = _get_reasons(bag)
     action = _get_action(bag, risk_score, risk_level)
+    risk_factors = _get_risk_factor_scores(bag, risk_score)
+    confidence_score, confidence_flags = _get_confidence(bag)
 
     return {
         **bag,
@@ -215,7 +272,18 @@ def score_bag(bag: dict, model: RandomForestClassifier, scaler: StandardScaler) 
         "risk_level": risk_level,
         "risk_reasons": reasons,
         "recommended_action": action,
+        "risk_factors": risk_factors,
+        "confidence_score": confidence_score,
+        "confidence_flags": confidence_flags,
+        "intervention_status": bag.get("intervention_status", "none"),
     }
+
+
+def rescore_bag(bag: dict) -> dict:
+    """Rescore a single bag using the cached model (used by simulation loop)."""
+    if _model is None or _scaler is None:
+        return bag
+    return score_bag(bag, _model, _scaler)
 
 
 def score_all(bags: list[dict]) -> tuple[list[dict], dict]:

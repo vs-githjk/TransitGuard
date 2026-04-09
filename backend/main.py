@@ -4,6 +4,7 @@ FastAPI backend for the Airport Baggage Risk Dashboard.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import random
 from datetime import datetime, timedelta
@@ -19,7 +20,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from data_generator import generate_dataset
-from risk_engine import score_all, get_feature_importances
+from risk_engine import score_all, get_feature_importances, rescore_bag
 
 DATA_PATH = Path(__file__).parent / "data" / "bags.json"
 
@@ -54,9 +55,73 @@ def _load_and_score():
     _scored_bags, _feature_importances = score_all(raw)
 
 
+# ---------------------------------------------------------------------------
+# Real-time simulation loop
+# ---------------------------------------------------------------------------
+
+SIMULATION_STATUSES = [
+    "arrived_at_carousel", "in_transfer_system", "sorted", "on_hold", "manual_handling",
+]
+
+
+async def _simulation_loop():
+    """Mutate bag data every 12 seconds to simulate live airport operations."""
+    while True:
+        await asyncio.sleep(12)
+        if not _scored_bags:
+            continue
+
+        # Only mutate bags not already resolved or loaded
+        eligible = [
+            b for b in _scored_bags
+            if b.get("current_status") not in ("loaded_outbound",)
+            and b.get("intervention_status") != "resolved"
+            and not b.get("intervention_done")
+        ]
+        if not eligible:
+            continue
+
+        sample = random.sample(eligible, min(7, len(eligible)))
+        for bag in sample:
+            mutated = False
+
+            # 35% chance: worsen delay, reduce effective layover
+            if random.random() < 0.35:
+                delta = random.randint(2, 10)
+                bag["arrival_delay_minutes"] = bag.get("arrival_delay_minutes", 0) + delta
+                bag["layover_minutes"] = max(5, bag.get("layover_minutes", 30) - delta)
+                mutated = True
+
+            # 40% chance: status progression
+            if random.random() < 0.40:
+                bag["current_status"] = random.choice(SIMULATION_STATUSES)
+
+            # 20% chance: congestion fluctuation
+            if random.random() < 0.20:
+                bag["baggage_system_congestion_score"] = round(
+                    min(1.0, max(0.0, bag.get("baggage_system_congestion_score", 0.3) + random.uniform(-0.1, 0.15))),
+                    3,
+                )
+                mutated = True
+
+            # Rescore only if risk-relevant fields changed
+            if mutated:
+                scored = rescore_bag(bag)
+                bag.update({
+                    "risk_score": scored["risk_score"],
+                    "risk_level": scored["risk_level"],
+                    "risk_reasons": scored["risk_reasons"],
+                    "recommended_action": scored["recommended_action"],
+                    "risk_factors": scored.get("risk_factors", []),
+                    "confidence_score": scored.get("confidence_score"),
+                    "confidence_flags": scored.get("confidence_flags", []),
+                })
+
+
 @app.on_event("startup")
-def startup():
+async def startup():
     _load_and_score()
+    asyncio.ensure_future(_simulation_loop())
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +188,6 @@ def get_analytics():
     predicted_missed = sum(1 for b in _scored_bags if b.get("risk_score", 0) >= 65)
     actual_missed = sum(1 for b in _scored_bags if b.get("missed_connection_label"))
 
-    # Risk distribution buckets
     buckets = [0] * 10
     for b in _scored_bags:
         idx = min(int(b.get("risk_score", 0) // 10), 9)
@@ -132,7 +196,6 @@ def get_analytics():
         {"range": f"{i*10}-{i*10+9}", "count": buckets[i]} for i in range(10)
     ]
 
-    # Feature importances
     importances = get_feature_importances()
     sorted_importances = sorted(importances.items(), key=lambda x: -x[1])
 
@@ -175,7 +238,6 @@ OPTIONAL_FIELDS_DEFAULTS = {
 
 
 def _coerce_row(row: dict) -> dict:
-    """Coerce CSV string values to correct Python types."""
     bool_fields = {
         "terminal_change", "gate_change", "late_checkin_flag",
         "customs_recheck_required", "security_recheck_required",
@@ -203,7 +265,6 @@ def _coerce_row(row: dict) -> dict:
                 row[f] = round(float(row[f]), 4)
             except (ValueError, TypeError):
                 row[f] = 0.0
-    # Fill optional fields with defaults if missing
     for f, default in OPTIONAL_FIELDS_DEFAULTS.items():
         row.setdefault(f, default)
     return row
@@ -211,18 +272,12 @@ def _coerce_row(row: dict) -> dict:
 
 @app.post("/upload")
 async def upload_csv(file: UploadFile = File(...)):
-    """
-    Upload a CSV of real baggage data to replace the synthetic dataset.
-    Required columns: see REQUIRED_FIELDS above.
-    Optional columns get sensible defaults if missing.
-    Returns a preview of scoring results.
-    """
     if not file.filename or not file.filename.endswith(".csv"):
         raise HTTPException(status_code=400, detail="Please upload a .csv file.")
 
     content = await file.read()
     try:
-        text = content.decode("utf-8-sig")  # handle Excel BOM
+        text = content.decode("utf-8-sig")
         reader = csv.DictReader(io.StringIO(text))
         rows = [dict(r) for r in reader]
     except Exception as e:
@@ -231,18 +286,15 @@ async def upload_csv(file: UploadFile = File(...)):
     if not rows:
         raise HTTPException(status_code=400, detail="CSV is empty.")
 
-    # Check required fields
     missing = [f for f in REQUIRED_FIELDS if f not in rows[0]]
     if missing:
         raise HTTPException(
             status_code=422,
-            detail=f"Missing required columns: {missing}. "
-                   f"Download the template for the expected format.",
+            detail=f"Missing required columns: {missing}. Download the template for the expected format.",
         )
 
     coerced = [_coerce_row(r) for r in rows]
 
-    # Save and re-score (retrain model on uploaded data if it has labels)
     DATA_PATH.parent.mkdir(exist_ok=True)
     with open(DATA_PATH, "w") as f:
         json.dump(coerced, f, indent=2)
@@ -265,7 +317,6 @@ async def upload_csv(file: UploadFile = File(...)):
 
 @app.get("/upload/template")
 def download_template():
-    """Return a CSV template showing the expected column headers and one example row."""
     all_fields = REQUIRED_FIELDS + [
         f for f in OPTIONAL_FIELDS_DEFAULTS if f not in REQUIRED_FIELDS
     ]
@@ -300,16 +351,14 @@ def download_template():
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=bagtrack_template.csv"},
+        headers={"Content-Disposition": "attachment; filename=transitguard_template.csv"},
     )
 
 
 @app.post("/refresh")
 def refresh_data():
-    """Regenerate synthetic data and re-score."""
     raw = generate_dataset(200)
     DATA_PATH.parent.mkdir(exist_ok=True)
-    # Remove cached model to retrain
     model_path = DATA_PATH.parent / "model.pkl"
     if model_path.exists():
         model_path.unlink()
@@ -321,7 +370,7 @@ def refresh_data():
 
 @app.post("/bags/{bag_id}/intervene")
 def simulate_intervention(bag_id: str):
-    """Simulate a staff intervention — reduces risk score. Can only be triggered once per bag."""
+    """Simulate a staff intervention — reduces risk score. Can only be triggered once."""
     for bag in _scored_bags:
         if bag["bag_id"] == bag_id:
             if bag.get("intervention_done"):
@@ -331,6 +380,7 @@ def simulate_intervention(bag_id: str):
             bag["risk_score"] = round(bag["risk_score"], 1)
             bag["current_status"] = "manual_handling"
             bag["intervention_done"] = True
+            bag["intervention_status"] = "in_progress"
             bag["recommended_action"] = "Intervention logged — bag being expedited"
             if bag["risk_score"] < 35:
                 bag["risk_level"] = "Low"
@@ -345,12 +395,39 @@ def simulate_intervention(bag_id: str):
     raise HTTPException(status_code=404, detail=f"Bag {bag_id} not found")
 
 
+class InterventionStatusUpdate(BaseModel):
+    status: str
+
+
+@app.patch("/bags/{bag_id}/intervention-status")
+def update_intervention_status(bag_id: str, body: InterventionStatusUpdate):
+    """Update intervention workflow status: none → pending → in_progress → resolved."""
+    valid = {"none", "pending", "in_progress", "resolved"}
+    if body.status not in valid:
+        raise HTTPException(status_code=400, detail=f"Status must be one of: {valid}")
+    for bag in _scored_bags:
+        if bag["bag_id"] == bag_id:
+            bag["intervention_status"] = body.status
+            if body.status == "resolved":
+                bag["risk_score"] = max(0, round(bag["risk_score"] - 10, 1))
+                if bag["risk_score"] < 35:
+                    bag["risk_level"] = "Low"
+                elif bag["risk_score"] < 65:
+                    bag["risk_level"] = "Medium"
+            return {"bag_id": bag_id, "intervention_status": body.status}
+    raise HTTPException(status_code=404, detail=f"Bag {bag_id} not found")
+
+
 @app.get("/passenger/{passenger_id}")
 def get_passenger_status(passenger_id: str):
     for bag in _scored_bags:
         if bag["passenger_id"] == passenger_id:
             risk_score = bag.get("risk_score", 0)
-            if risk_score >= 65:
+            intervention_status = bag.get("intervention_status", "none")
+            if intervention_status == "resolved":
+                notification_status = "on_track"
+                message = "Your bag was flagged earlier but has been successfully handled. It's on track for your connection."
+            elif risk_score >= 65:
                 notification_status = "at_risk"
                 message = "Your bag is at risk of missing your connection. Our team is working on it."
             elif risk_score >= 35:
@@ -374,20 +451,13 @@ def get_passenger_status(passenger_id: str):
 
 @app.get("/live-updates")
 def live_updates():
-    """Return simulated status updates for a few random bags."""
+    """Return current status snapshot for a few random bags."""
     sample = random.sample(_scored_bags, min(5, len(_scored_bags)))
-    statuses = [
-        "checked_in", "loaded_inbound", "arrived_at_carousel",
-        "in_transfer_system", "sorted", "loaded_outbound",
-        "on_hold", "manual_handling",
-    ]
     updates = []
     for bag in sample:
-        new_status = random.choice(statuses)
-        bag["current_status"] = new_status
         updates.append({
             "bag_id": bag["bag_id"],
-            "current_status": new_status,
+            "current_status": bag.get("current_status"),
             "risk_score": bag.get("risk_score"),
             "risk_level": bag.get("risk_level"),
             "timestamp": datetime.now().isoformat(),
@@ -400,7 +470,6 @@ def live_updates():
 # ---------------------------------------------------------------------------
 
 def _enrich_with_timeline(bag: dict) -> dict:
-    """Add a chronologically sorted status timeline to a bag record."""
     bag = dict(bag)
     actual_arrival = bag.get("actual_arrival", datetime.now().isoformat())
     sorted_time = bag.get("time_bag_sorted", actual_arrival)
@@ -421,7 +490,6 @@ def _enrich_with_timeline(bag: dict) -> dict:
             return "in_progress"
         return "pending"
 
-    # Build timeline in logical order with correct timestamps
     timeline = [
         {
             "event": "Bag checked in at origin",
@@ -475,7 +543,6 @@ def _enrich_with_timeline(bag: dict) -> dict:
         "status": "completed" if current_status == "loaded_outbound" else "pending",
     })
 
-    # Sort chronologically
     def sort_key(e: dict) -> str:
         return e.get("time") or ""
 

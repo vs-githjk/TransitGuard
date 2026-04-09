@@ -1,4 +1,11 @@
 export type RiskLevel = "Low" | "Medium" | "High";
+export type InterventionStatus = "none" | "pending" | "in_progress" | "resolved";
+
+export interface RiskFactor {
+  label: string;
+  feature: string;
+  score: number;
+}
 
 export interface Bag {
   bag_id: string;
@@ -32,6 +39,11 @@ export interface Bag {
   risk_level: RiskLevel;
   risk_reasons: string[];
   recommended_action: string;
+  risk_factors?: RiskFactor[];
+  confidence_score?: number;
+  confidence_flags?: string[];
+  intervention_status?: InterventionStatus;
+  intervention_done?: boolean;
   timeline?: TimelineEvent[];
 }
 

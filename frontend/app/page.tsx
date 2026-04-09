@@ -309,17 +309,26 @@ export default function DashboardPage() {
                       )}
                     </td>
                     <td className="px-3 py-3">
-                      {bag.recommended_action ? (
-                        <button
-                          onClick={(e) => openPopover(e, `${bag.bag_id}-action`, [bag.recommended_action])}
-                          className={`flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors ${popover?.key === `${bag.bag_id}-action` ? "bg-slate-200 border-slate-400 text-slate-800 dark:bg-slate-700 dark:border-slate-500 dark:text-slate-200" : "bg-slate-100 border-slate-200 text-slate-500 hover:border-slate-400 hover:text-slate-700 dark:bg-slate-800/60 dark:border-slate-700 dark:text-slate-400 dark:hover:border-slate-500 dark:hover:text-slate-300"}`}
-                        >
-                          <span className="truncate max-w-32">{bag.recommended_action}</span>
-                          <ChevronDown className={`w-3 h-3 shrink-0 transition-transform ${popover?.key === `${bag.bag_id}-action` ? "rotate-180" : ""}`} />
-                        </button>
-                      ) : (
-                        <span className="text-xs text-slate-300 dark:text-slate-600">—</span>
-                      )}
+                      <div className="flex items-center gap-1.5">
+                        {bag.intervention_status && bag.intervention_status !== "none" && (
+                          <span className={`shrink-0 w-2 h-2 rounded-full ${
+                            bag.intervention_status === "resolved" ? "bg-emerald-500" :
+                            bag.intervention_status === "in_progress" ? "bg-blue-500" :
+                            "bg-yellow-500"
+                          }`} title={bag.intervention_status.replace("_", " ")} />
+                        )}
+                        {bag.recommended_action ? (
+                          <button
+                            onClick={(e) => openPopover(e, `${bag.bag_id}-action`, [bag.recommended_action])}
+                            className={`flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors ${popover?.key === `${bag.bag_id}-action` ? "bg-slate-200 border-slate-400 text-slate-800 dark:bg-slate-700 dark:border-slate-500 dark:text-slate-200" : "bg-slate-100 border-slate-200 text-slate-500 hover:border-slate-400 hover:text-slate-700 dark:bg-slate-800/60 dark:border-slate-700 dark:text-slate-400 dark:hover:border-slate-500 dark:hover:text-slate-300"}`}
+                          >
+                            <span className="truncate max-w-28">{bag.recommended_action}</span>
+                            <ChevronDown className={`w-3 h-3 shrink-0 transition-transform ${popover?.key === `${bag.bag_id}-action` ? "rotate-180" : ""}`} />
+                          </button>
+                        ) : (
+                          <span className="text-xs text-slate-300 dark:text-slate-600">—</span>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))

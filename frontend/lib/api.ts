@@ -45,6 +45,17 @@ export async function triggerIntervention(bagId: string) {
   return post(`/bags/${bagId}/intervene`);
 }
 
+export async function updateInterventionStatus(bagId: string, status: string) {
+  const res = await fetch(`${BASE_URL}/bags/${bagId}/intervention-status`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status }),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error(`API error ${res.status}`);
+  return res.json();
+}
+
 export async function refreshData() {
   return post("/refresh");
 }
